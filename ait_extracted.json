@@ -1,0 +1,67 @@
+[
+{
+    "full_path" : "hls/cholesky_blocked.cpp",
+    "filename" : "cholesky_blocked.cpp",
+    "name" : "cholesky_blocked",
+    "type" : 5862896218,
+    "num_instances" : 1,
+    "task_creation" : true,
+    "instrumentation" : false,
+    "periodic" : false,
+    "lock" : false,
+    "deps" : true,
+    "ompif" : true
+},
+{
+    "full_path" : "hls/omp_potrf.cpp",
+    "filename" : "omp_potrf.cpp",
+    "name" : "omp_potrf",
+    "type" : 5840911080,
+    "num_instances" : 1,
+    "task_creation" : false,
+    "instrumentation" : false,
+    "periodic" : false,
+    "lock" : false,
+    "deps" : false,
+    "ompif" : false
+},
+{
+    "full_path" : "hls/omp_trsm.cpp",
+    "filename" : "omp_trsm.cpp",
+    "name" : "omp_trsm",
+    "type" : 6757884748,
+    "num_instances" : 1,
+    "task_creation" : false,
+    "instrumentation" : false,
+    "periodic" : false,
+    "lock" : false,
+    "deps" : false,
+    "ompif" : false
+},
+{
+    "full_path" : "hls/omp_gemm.cpp",
+    "filename" : "omp_gemm.cpp",
+    "name" : "omp_gemm",
+    "type" : 6757388164,
+    "num_instances" : 1,
+    "task_creation" : false,
+    "instrumentation" : false,
+    "periodic" : false,
+    "lock" : false,
+    "deps" : false,
+    "ompif" : false
+},
+{
+    "full_path" : "hls/omp_syrk.cpp",
+    "filename" : "omp_syrk.cpp",
+    "name" : "omp_syrk",
+    "type" : 6757855513,
+    "num_instances" : 1,
+    "task_creation" : false,
+    "instrumentation" : false,
+    "periodic" : false,
+    "lock" : false,
+    "deps" : false,
+    "ompif" : false
+}
+]
