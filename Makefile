@@ -51,7 +51,7 @@ $(PROGRAM_)$(BLOCK_SIZE)-p: ./src/$(PROGRAM_).c
 	$(CC) $(CFLAGS_) $^ -o $@ $(LDFLAGS_)
 
 ait:
-	ait -b alveo_u55c -c 300 -n cholesky_perf_256 -j 4 -v --disable_board_support_check --wrapper_version 13 --disable_spawn_queues --placement_file u55c_placement_$(GEMM_NUM_ACCS).json --floorplanning_constr all --slr_slices all --regslice_pipeline_stages 1:1:1 --interconnect_regslice all --enable_pom_axilite --max_deps_per_task=3 --max_args_per_task=3 --max_copies_per_task=3 --picos_tm_size=128 --picos_dm_size=390 --picos_vm_size=390 --from_step=$(FROM_STEP) --to_step=$(TOP_STEP)
+	ait -b alveo_u55c -c 300 -n cholesky -j 4 -v --disable_board_support_check --wrapper_version 13 --disable_spawn_queues --placement_file u55c_placement_$(GEMM_NUM_ACCS).json --floorplanning_constr all --slr_slices all --regslice_pipeline_stages 1:1:1 --interconnect_regslice all --enable_pom_axilite --max_deps_per_task=3 --max_args_per_task=3 --max_copies_per_task=3 --picos_tm_size=128 --picos_dm_size=390 --picos_vm_size=390 --from_step=$(FROM_STEP) --to_step=$(TOP_STEP)
 
 info:
 	@echo "========== OPENBLAS =========="
