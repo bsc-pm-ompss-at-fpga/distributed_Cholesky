@@ -163,11 +163,11 @@ void cholesky_blocked_moved(const unsigned long long int nt, __mcxx_ptr_t<float>
 					const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=calc_owner(k, i, __ompif_size), .depid=0};
 					const __data_owner_info_t owner_1 = {.size=ts*ts*sizeof(float), .owner=calc_owner(k, j, __ompif_size), .depid=1};
 					ap_uint<2> n_data_owners = 0;
-					if ((j-(k+1)) < __ompif_size) {
+					if (j-(k+1) < __ompif_size) {
 						data_owners[0] = owner_0;
 						++n_data_owners;
 					}
-					if (i+k+1 < __ompif_size) {
+					if (i-(k+1) < __ompif_size) {
 						data_owners[n_data_owners] = owner_1;
 						++n_data_owners;
 					}
