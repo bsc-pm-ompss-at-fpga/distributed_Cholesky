@@ -167,17 +167,7 @@ void cholesky_blocked_moved(const unsigned long long int nt, __mcxx_ptr_t<float>
 						data_owners[0] = owner_0;
 						++n_data_owners;
 					}
-					int low = (k+1)%__ompif_size;
-					int high = j%__ompif_size;
-					int owner = i%__ompif_size;
-					int cond = 0;
-					if (high >= low) {
-						cond = owner >= low && owner < high;
-					}
-					else {
-						cond = owner >= low || owner < high;
-					}
-					if (i-(k+1) <= __ompif_size && calc_owner(j, i, __ompif_size) != calc_owner(j, j, __ompif_size) && !cond) {
+					if (i+k+1 < __ompif_size) {
 						data_owners[n_data_owners] = owner_1;
 						++n_data_owners;
 					}
