@@ -145,7 +145,7 @@ Block $(i,k)$ is constant for the `gemm` loop, since it modifies variable $j$, u
 Thus, after $n$ iterations, the block $(i,k)$ is already sent to every rank.
 We can see this in the following image:
 
-![cholesky_imp (3)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/ae2692f0-ac07-474d-9c78-d9ecfc7f407c)
+![cholesky_imp (2)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/3245d043-d5a9-4c7b-a84b-8bea6dc4d157)
 
 Its the same case, but there is an extra variable $j$.
 Also, we can be sure that block $(i,k)$ is not sent before the `gemm` loop, because for the same $k$, $i$ only increases and thus never repeats the same row.
@@ -171,6 +171,16 @@ In summary, since we know that $i > j$ for all $i$, we can combine both conditio
 * If $i-(k+1) < n$, we know that $j-(k+1) < n$, so both dependencies may communicate (2 data owners).
 * If $i-(k+1) >= n$ and $j-(k+1) < n$, only the first dependence may communicate (1 data owner).
 * if $i-(k+1) >= n$ and $j-(k+1) >= n$ there's no communication (0 data owners).
+
+##### SYRK
+
+This one is as easy as `trsm`.
+`syrk` has one input block $(i,k)$ and one output block $(i,i)$.
+Before a `syrk` task on row $i$ of any $k$, there are $i-(k+1)$ `gemm` tasks with the same $(i,k)$ input block, so the condition is the same $i-(k+1) < n$.
+You can see that in the last figure, but for completeness here is an example of a 5x5 block matrix with 3 ranks.
+
+![cholesky_imp (1)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/fdd4b5aa-2258-4337-af64-cad3451b8d98)
+
 
 ### Memory optimization
 
