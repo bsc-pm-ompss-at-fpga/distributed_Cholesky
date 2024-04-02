@@ -213,17 +213,22 @@ However, the total execution time of `potrf` compared to the rest is very small 
 
 The `trsm` solves a triangular magtrix equation, storing the result in block $B$, and $A$ is transposed.
 There is a main loop over $k$.
-Inside, first an $i$ loop that is pipelined and unrolled by a configurable factor (in the code is unrolled to be executed in 2 iterations).
+Inside, first an $i$ loop that is pipelined and unrolled by a configurable factor (in the code is unrolled to be executed in 4 iterations).
 Here we get II 1 because the $B$ block is partitioned cyclically by columns (since is column-major), and the loop iterates over consecutive columns.
 In this case, column-major order helps because if it were row major, we would have to change partitioning and thus slow-down loading the block from memory, as well as storing the result.
 The code loads the block as fast as possible with a data bus that can bring multiple data elements per cycle, but for that we need a cylic partitioning so we can store the data in BRAMs in the same cycle.
 With a column partition, positions from consecutive column would be stored in the same memory bank, and it would not be possible to store them in parallel.
 
 The second loop is a nested loop.
-It is pipelined with a factor of 2 (it could be 1 but this way we reduce resource usage of this kernel), and the inner loop is also unrolled implicitly by the pipeline directive.
+It is pipelined with a factor of 4 (it could be 1 but this way we reduce resource usage of this kernel), and the inner loop is also unrolled implicitly by the pipeline directive.
 Since `tmp_row` and $B$ (it's called row but in fact it's a column) are partitioned, we can access to half of the elements in parallel to achieve II=2.
 
 ### GEMM
 
-
-
+This is a regular matrix multiply in column-major order with the $B$ matrix transposed.
+The middle loop is pipeline with a factor of 2 (could be 1 but this way we reduce resources), this implies an unroll of the innermost loop and flattening with the outermost.
+We get the desired II because of the array partitioning and because the loop order doesn't add any dependence between consecutive iterations of the inner and middle loops (kij order).
+Consequently, we calculate 128 elements per cycle.
+Again, this is possible because the matrices are column-major.
+Without transposing $B$, it is possible to use a cylic partition and use efficiently the memory port.
+But in this case $B$ is transposed, so with row-major we would have the same conflict as with `trsm`.
