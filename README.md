@@ -203,4 +203,27 @@ Also, loading an entire block from memory is faster because we can do a single c
 
 ### POTRF
 
+The `potrf` kernel FPGA implementation is not very interesing.
+It doesn't give much margin for optimizations due to the access patterns and dependencies between iterations.
+There are pipelining directives, but the initiation interval can't reach 1.
+To give a little boost, the loops are manually unrolled by a factor of 2.
+However, the total execution time of `potrf` compared to the rest is very small so we didn't dedicate much efforts in optimizing the kernel.
+
+### TRSM
+
+The `trsm` solves a triangular magtrix equation, storing the result in block $B$, and $A$ is transposed.
+There is a main loop over $k$.
+Inside, first an $i$ loop that is pipelined and unrolled by a configurable factor (in the code is unrolled to be executed in 2 iterations).
+Here we get II 1 because the $B$ block is partitioned cyclically by columns (since is column-major), and the loop iterates over consecutive columns.
+In this case, column-major order helps because if it were row major, we would have to change partitioning and thus slow-down loading the block from memory, as well as storing the result.
+The code loads the block as fast as possible with a data bus that can bring multiple data elements per cycle, but for that we need a cylic partitioning so we can store the data in BRAMs in the same cycle.
+With a column partition, positions from consecutive column would be stored in the same memory bank, and it would not be possible to store them in parallel.
+
+The second loop is a nested loop.
+It is pipelined with a factor of 2 (it could be 1 but this way we reduce resource usage of this kernel), and the inner loop is also unrolled implicitly by the pipeline directive.
+Since `tmp_row` and $B$ (it's called row but in fact it's a column) are partitioned, we can access to half of the elements in parallel to achieve II=2.
+
+### GEMM
+
+
 
