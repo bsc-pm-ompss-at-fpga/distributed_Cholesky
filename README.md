@@ -137,8 +137,27 @@ Thus, every rank has the $(k,k)$, and we don't have to repeat the copy.
 
 This one is a little more tricky, but we use the same reasoning than before.
 In fact, all optimizations are based on the fact that the same block is sent to consecutive ranks, so after $n$ tasks of that block, we can stop communication.
+There are two input blocks, always produced by previous `trsm` tasks, $(i,k)$ and $(j,k)$, and one output block $(i,j)$.
+
+First, lets look at the first input dependence over block $(i,k)$, which is the easiest to understand.
+This is identical to the `trsm` case, but loop variable $j$ traverses rows instead of columns.
+Block $(i,k)$ is constant for the `gemm` loop, since it modifies variable $j$, used in the output block $(i,j)$.
+Thus, after $n$ iterations, the block $(i,k)$ is already sent to every rank.
+We can see this in the following image:
 
 ![cholesky_imp (3)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/ae2692f0-ac07-474d-9c78-d9ecfc7f407c)
+
+Its the same case, but there is an extra variable $j$.
+Also, we can be sure that block $(i,k)$ is not sent before the `gemm` loop, because for the same $k$, $i$ only increases and thus never repeats the same row.
+The $k$ variable also increases without repeating, so on different $k$ the input block also changes and thus we never repeat.
+In conclusion, the condition to enable communication is $j-(k+1) < n$.
+
+The second dependence is over block $(j,k)$, which changes on every iteration.
+However, the condition ends being $i-(k+1) < n$.
+This is because the value $i-(k+1)$ tells us how many tasks on previous $i$ iterations have the block $(i,k)$ as input.
+We can also see it as the distance between the input and output blocks according to the cyclic formula $(i+j)\\%n$.
+These tasks include `gemm` and `syrk`.
+The value of the condition is constant for the $j$ loop because the distance between the input and output blocks is also constant.
 
 
 ### Memory optimization
