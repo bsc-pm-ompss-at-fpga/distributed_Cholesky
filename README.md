@@ -159,6 +159,18 @@ We can also see it as the distance between the input and output blocks according
 These tasks include `gemm` and `syrk`.
 The value of the condition is constant for the $j$ loop because the distance between the input and output blocks is also constant.
 
+![cholesky_imp](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/cd869471-c07d-4e93-a8ac-d16a283ac048)
+
+Here we see all the tasks that have as input the same block of the second dependence of a `gemm` task for a 4x4 block matrix with 4 ranks (showing only the relevant blocks).
+First, that block is the first dependence of the `gemm` tasks for $i-1$ (if any), as well as the input block for the `syrk` task of $i-1$.
+After that, the block $(j,k)$ appears as the second dependence of all `gemm` with the same $j$.
+The number of tasks created since the first appearance is in fact $i-(k+1)$, and although the coordinates travel on the two dimensions, each task is assigned to consecutive ranks because the assignment is cyclic on both dimensions.
+I.e. after $n$ tasks, the ranks start repeating, hence the condition we introduced earlier $i-(k+1) < n$.
+
+In summary, since we know that $i > j$ for all $i$, we can combine both conditions to decide the number of data owners of a `gemm` task.
+* If $i-(k+1) < n$, we know that $j-(k+1) < n$, so both dependencies may communicate (2 data owners).
+* If $i-(k+1) >= n$ and $j-(k+1) < n$, only the first dependence may communicate (1 data owner).
+* if $i-(k+1) >= n$ and $j-(k+1) >= n$ there's no communication (0 data owners).
 
 ### Memory optimization
 
