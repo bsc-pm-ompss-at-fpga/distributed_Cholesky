@@ -124,14 +124,21 @@ I.e. if this condition is true, we give one data owner with the $(k,k)$ block.
 If not, we give 0 data owners, ensuring that there's no communication.
 Here is a visual example with 3 ranks on a 6x6 block matrix (only showing the first column):
 
-![cholesky_imp (1)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/321c96c5-9e48-4826-a249-715587f9d794)
+![cholesky_imp (2)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/1084518a-a0a5-44b1-b631-a13421fda697)
 
+The numbers on each position of the column represent the rank assigned to that block.
 $i-(k+1)$ is the iteration count starting from 0.
 It tells how many `trsm` tasks have already been created.
 We can see that rank 1 repeats after creating 3 tasks, because there are 3 ranks and the distribution is cyclic.
 This same reasoning applies to every rank, so we know that after creating $n$ tasks, whichever is the rank that has the $(k,k)$ block, the loop will have already created tasks for each rank.
 Thus, every rank has the $(k,k)$, and we don't have to repeat the copy.
 
+##### GEMM
+
+This one is a little more tricky, but we use the same reasoning than before.
+In fact, all optimizations are based on the fact that the same block is sent to consecutive ranks, so after $n$ tasks of that block, we can stop communication.
+
+![cholesky_imp (3)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/ae2692f0-ac07-474d-9c78-d9ecfc7f407c)
 
 
 ### Memory optimization
@@ -141,7 +148,7 @@ Since the matrix dimensions must be square, the size increases very fast, and wi
 A small optimization that we do is only allocate the useful part, i.e. the lower triangle of the block matrix.
 This is not exactly the lower triangle of the whole matrix, because on the blocks of the diagonal there are elements of the upper triangle, but we save close to 2x memory by doing this.
 
-![cholesky_imp (3)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/efcf416d-58ef-4010-a3a1-6446dc61c286)
+![cholesky_imp (4)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/7c717c5c-12b7-4d84-b2c0-3ea1f57fea93)
 
 This image show how we store the matrix in memory.
 First there is the original matrix, the numbers are coordinates to each element, and the colors represent the block each element belongs to.
