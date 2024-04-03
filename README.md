@@ -232,3 +232,12 @@ Consequently, we calculate 128 elements per cycle.
 Again, this is possible because the matrices are column-major.
 Without transposing $B$, it is possible to use a cylic partition and use efficiently the memory port.
 But in this case $B$ is transposed, so with row-major we would have the same conflict as with `trsm`.
+
+### SYRK
+
+This one is very similar to `gemm`, but it multiplies a symmetric matrix by its transpose.
+Also, the code only updates the lower-triangular half of the block.
+However, you will see the innermost $j$ loop has full range from 0 to `ts` (block size).
+Instead of starting at $i$, the code executes all iterations and multiplies by 0 when $j < i$.
+This is useful to get pipelining in the middle $i$ loop, because the $j$ loop has a constant trip count and we can unroll it (needed for pipelining).
+To reduce resources, the II is 4, so we calculate 64 elements per cycle.
