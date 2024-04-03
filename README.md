@@ -26,13 +26,13 @@ static const int BS = ...;
 #pragma oss task inout(A)
 void potrf(float A[BS][BS]);
 
-#pragma oss task input(A) inout(B)
+#pragma oss task in(A) inout(B)
 void trsm(floag A[BS][BS], float B[BS][BS]);
 
-#pragma oss task input(A) input(B) inout(C)
+#pragma oss task in(A) in(B) inout(C)
 void gemm(float A[BS][BS], float B[BS][BS], float C[BS][BS]);
 
-#pragma oss task input(A) inout(B)
+#pragma oss task in(A) inout(B)
 void syrk(float A[BS][BS], float B[BS][BS]);
 
 void cholesky_blocked(const int nt, float *A[nt][nt])
