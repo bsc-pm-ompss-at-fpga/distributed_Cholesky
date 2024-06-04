@@ -15,6 +15,8 @@
 #include <ap_int.h>
 #include <ap_axi_sdata.h>
 
+typedef unsigned int uint;
+
 static ap_uint<64> __mcxx_taskId;
 template<class T>
 union __mcxx_cast {
@@ -36,8 +38,7 @@ struct __data_owner_info_t {
 	unsigned char owner;
 };
 
-void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, const ap_uint<8> numArgs, const unsigned long long int args[], const ap_uint<8> numDeps, const unsigned long long int deps[], const ap_uint<8> numCopies, const __fpga_copyinfo_t copies[], int numDataOwners, __data_owner_info_t data_owners[], hls::stream<mcxx_outaxis>& mcxx_outPort, unsigned char ompif_rank, unsigned char ompif_size, unsigned char owner);
-void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, const ap_uint<8> numArgs, const unsigned long long int args[], const ap_uint<8> numDeps, const unsigned long long int deps[], const ap_uint<8> numCopies, const __fpga_copyinfo_t copies[], hls::stream<mcxx_outaxis>& mcxx_outPort);
+void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, const ap_uint<8> numArgs, const unsigned long long int args[], const ap_uint<8> numDeps, const unsigned long long int deps[], const ap_uint<8> numCopies, const __fpga_copyinfo_t copies[], int numDataOwners, __data_owner_info_t data_owners[], hls::stream<mcxx_outaxis>& mcxx_outPort, unsigned char owner);
 void mcxx_taskwait(hls::stream<ap_uint<8> >& mcxx_spawnInPort, hls::stream<mcxx_outaxis>& mcxx_outPort);
 template <typename T>
 struct __mcxx_ptr_t {
@@ -58,109 +59,169 @@ struct __mcxx_ptr_t {
 	}
 };
 
+static inline int get_block_idx(uint i, uint j, uint nt, unsigned char r, unsigned char s, const ap_uint<2> cfidx, const uint ndiags, const unsigned char remstart)
+{
+#pragma HLS inline
+	uint cf;
+	uint globaln = i+j;
+	uint n = globaln/s;
+	if (cfidx == 0)
+		cf = 0;
+	else if (cfidx == 1)
+		cf = (n+1)/2;
+	else if (cfidx == 2)
+		cf = (n+1)/4;
+	else
+		cf = (n+2)/4;
+	uint rem = n - ndiags;
+	uint remblocks = (rem+1)*remstart + s*((rem*(rem+1))/2) + (rem+1);
+	uint nblocks = (s*n*(n+1) + 2*(n+1)*r)/4 + (n+1) - cf - (globaln >= nt ? remblocks : 0);
+	uint block_idx = nblocks - ((r + n*s)/2 + 1) + (globaln >= nt ? remstart + rem*s + 1 : 0) + (globaln >= nt ? nt-1-i : j);
+	return block_idx;
+}
+
 unsigned char calc_owner(int i, int j, unsigned char size) {
 #pragma HLS inline
 	return (i + j)%size;
 }
 
 constexpr unsigned long long int ts = 256;
+constexpr unsigned int recv_buffer_size = 2;
 
-//We only store the lower matrix in column major order
-static inline __mcxx_ptr_t<float> dep_addr(__mcxx_ptr_t<float> A, int i, int j, unsigned long long int nt, unsigned long long int tb) {
-#pragma HLS inline
-	const int irem = nt-i;
-	return A + ((tb - (irem*(irem+1)/2)) + j - i)*ts*ts;
-}
-
-void cholesky_blocked_moved(const unsigned long long int nt, __mcxx_ptr_t<float> A, unsigned __ompif_rank, unsigned char __ompif_size, hls::stream<ap_uint<8> >& mcxx_spawnInPort, hls::stream<mcxx_outaxis>& mcxx_outPort)
+void cholesky_blocked_moved(const uint nt, __mcxx_ptr_t<float> A, __mcxx_ptr_t<float> recv_buffer, unsigned char __ompif_rank, unsigned char __ompif_size, hls::stream<ap_uint<8> >& mcxx_spawnInPort, hls::stream<mcxx_outaxis>& mcxx_outPort)
 {
 #pragma HLS inline
-	//Total number of blocks
-	const unsigned long long int tb = (nt*(nt+1))/2;
+	unsigned char r = __ompif_rank;
+	unsigned char s = __ompif_size;
+	ap_uint<2> cfidx;
+	uint ndiags = nt/s + (r < nt%s ? 1 : 0);
+	unsigned char remstart = r >= nt%s ? r-nt%s : r+s - nt%s;
+	if (s%2 == 0 && r%2 == 0)
+		cfidx = 0;
+	else if (s%2 == 0 && r%2 == 1)
+		cfidx = 1;
+	else if (s%2 == 1 && r%2 == 0)
+		cfidx = 2;
+	else
+		cfidx = 3;
 	main_loop:
-	for (int k = 0; k < nt; k++)
+	for (uint k = 0; k < nt; k++)
 	{
 		{
+			const unsigned char task_owner = calc_owner(k, k, s);
+			uint A_idx;
+			if (task_owner == r)
+				A_idx = get_block_idx(k, k, nt, r, s, cfidx, ndiags, remstart);
 			unsigned long long int __mcxx_args[1L];
 			unsigned long long int __mcxx_deps[1L];
 			__fpga_copyinfo_t __mcxx_copies[1L];
 			__mcxx_ptr_t<float> __mcxx_arg_0;
-			__mcxx_arg_0 = dep_addr(A, k, k, nt, tb);
+			__mcxx_arg_0 = A + A_idx*ts*ts;
 			__mcxx_args[0] = __mcxx_arg_0.val;
 			const __fpga_copyinfo_t tmp_0 = {.copy_address = __mcxx_arg_0.val, .arg_idx = 0, .flags = 3, .size = ts*ts * sizeof(float)};
 			__mcxx_copies[0] = tmp_0;
 			__mcxx_ptr_t<float> __mcxx_dep_0;
-			__mcxx_dep_0 = dep_addr(A, k, k, nt, tb);
+			__mcxx_dep_0 = A + A_idx*ts*ts;
 			__mcxx_deps[0] = 3LLU << 58 | __mcxx_dep_0.val;
-			mcxx_task_create(5840911080LLU, 255, 1, __mcxx_args, 1, __mcxx_deps, 1, __mcxx_copies, 0, 0, mcxx_outPort, __ompif_rank, __ompif_size, calc_owner(k, k, __ompif_size));
+			mcxx_task_create(5840911080LLU, 255, 1, __mcxx_args, 1, __mcxx_deps, 1, __mcxx_copies, 0, 0, mcxx_outPort, task_owner);
 		}
-		trsm_loop:
-		for (int i = nt - 1; i >= k + 1; i--)
+
+		inner_loop:
+		for (uint i = k + 1; i < nt; i++)
 		{
 			{
+				const unsigned char task_owner = calc_owner(i, k, s);
+				const unsigned char data_owner0 = calc_owner(k, k, s);
+				__mcxx_ptr_t<float> Ablock, Bblock;
+				if (task_owner == r && data_owner0 != r)
+					Ablock = recv_buffer + ((k%recv_buffer_size)*nt)*ts*ts;
+				else if (data_owner0 == r) {
+					uint A_idx = get_block_idx(k, k, nt, r, s, cfidx, ndiags, remstart);
+					Ablock = A + A_idx*ts*ts;
+				}
+				if (task_owner == r) {
+					uint B_idx = get_block_idx(i, k, nt, r, s, cfidx, ndiags, remstart);
+					Bblock = A + B_idx*ts*ts;
+				}
 				unsigned long long int __mcxx_args[2L];
 				unsigned long long int __mcxx_deps[2L];
 				__fpga_copyinfo_t __mcxx_copies[2L];
 				__mcxx_ptr_t<float> __mcxx_arg_0;
-				__mcxx_arg_0 = dep_addr(A, k, k, nt, tb);
+				__mcxx_arg_0 = Ablock;
 				__mcxx_args[0] = __mcxx_arg_0.val;
 				const __fpga_copyinfo_t tmp_0 = {.copy_address = __mcxx_arg_0.val, .arg_idx = 0, .flags = 1, .size = ts*ts * sizeof(const float)};
 				__mcxx_copies[0] = tmp_0;
 				__mcxx_ptr_t<float> __mcxx_arg_1;
-				__mcxx_arg_1 = dep_addr(A, k, i, nt, tb);
+				__mcxx_arg_1 = Bblock;
 				__mcxx_args[1] = __mcxx_arg_1.val;
 				const __fpga_copyinfo_t tmp_1 = {.copy_address = __mcxx_arg_1.val, .arg_idx = 1, .flags = 3, .size = ts*ts * sizeof(float)};
 				__mcxx_copies[1] = tmp_1;
 				__mcxx_ptr_t<float> __mcxx_dep_0;
-				__mcxx_dep_0 = dep_addr(A, k, k, nt, tb);
+				__mcxx_dep_0 = Ablock;
 				__mcxx_deps[0] = 1LLU << 58 | __mcxx_dep_0.val;
 				__mcxx_ptr_t<float> __mcxx_dep_1;
-				__mcxx_dep_1 = dep_addr(A, k, i, nt, tb);
+				__mcxx_dep_1 = Bblock;
 				__mcxx_deps[1] = 3LLU << 58 | __mcxx_dep_1.val;
 				__data_owner_info_t data_owners[1];
-				const ap_uint<1> n_data_owners = nt-1-i < __ompif_size ? 1 : 0;
-				const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=calc_owner(k, k,__ompif_size)};
+				const ap_uint<1> n_data_owners = i-(k+1) < __ompif_size ? 1 : 0;
+				const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=data_owner0};
 				data_owners[0] = owner_0;
-				mcxx_task_create(6757884748LLU, 255, 2, __mcxx_args, 2, __mcxx_deps, 2, __mcxx_copies, n_data_owners, data_owners, mcxx_outPort, __ompif_rank, __ompif_size, calc_owner(k, i, __ompif_size));
+				mcxx_task_create(6757884748LLU, 255, 2, __mcxx_args, 2, __mcxx_deps, 2, __mcxx_copies, n_data_owners, data_owners, mcxx_outPort, task_owner);
 			}
-		}
-		syrk_loop:
-		for (int i = k + 1; i < nt; i++)
-		{
 			gemm_loop:
-			for (int j = k + 1; j < i; j++)
+			for (uint j = k + 1; j < i; j++)
 			{
 				{
+					const unsigned char task_owner = calc_owner(i, j, s);
+					const unsigned char data_owner0 = calc_owner(i, k, s);
+					const unsigned char data_owner1 = calc_owner(j, k, s);
+					__mcxx_ptr_t<float> Ablock, Bblock, Cblock;
+					if (task_owner == r && data_owner0 != r)
+						Ablock = recv_buffer + ((k%recv_buffer_size)*nt + i)*ts*ts;
+					else if (data_owner0 == r) {
+						uint A_idx = get_block_idx(i, k, nt, r, s, cfidx, ndiags, remstart);
+						Ablock = A + A_idx*ts*ts;
+					}
+					if (task_owner == r && data_owner1 != r)
+						Bblock = recv_buffer + ((k%recv_buffer_size)*nt + j)*ts*ts;
+					else if (data_owner1 == r) {
+						uint B_idx = get_block_idx(j, k, nt, r, s, cfidx, ndiags, remstart);
+						Bblock = A + B_idx*ts*ts;
+					}
+					if (task_owner == r) {
+						uint C_idx = get_block_idx(i, j, nt, r, s, cfidx, ndiags, remstart);
+						Cblock = A + C_idx*ts*ts;
+					}
 					unsigned long long int __mcxx_args[3L];
 					unsigned long long int __mcxx_deps[3L];
 					__fpga_copyinfo_t __mcxx_copies[3L];
 					__mcxx_ptr_t<float> __mcxx_arg_0;
-					__mcxx_arg_0 = dep_addr(A, k, i, nt, tb);
+					__mcxx_arg_0 = Ablock;
 					__mcxx_args[0] = __mcxx_arg_0.val;
 					const __fpga_copyinfo_t tmp_0 = {.copy_address = __mcxx_arg_0.val, .arg_idx = 0, .flags = 1, .size = ts*ts * sizeof(const float)};
 					__mcxx_copies[0] = tmp_0;
 					__mcxx_ptr_t<float> __mcxx_arg_1;
-					__mcxx_arg_1 = dep_addr(A, k, j, nt, tb);
+					__mcxx_arg_1 = Bblock;
 					__mcxx_args[1] = __mcxx_arg_1.val;
 					const __fpga_copyinfo_t tmp_1 = {.copy_address = __mcxx_arg_1.val, .arg_idx = 1, .flags = 1, .size = ts*ts * sizeof(const float)};
 					__mcxx_copies[1] = tmp_1;
 					__mcxx_ptr_t<float> __mcxx_arg_2;
-					__mcxx_arg_2 = dep_addr(A, j, i, nt, tb);
+					__mcxx_arg_2 = Cblock;
 					__mcxx_args[2] = __mcxx_arg_2.val;
 					const __fpga_copyinfo_t tmp_2 = {.copy_address = __mcxx_arg_2.val, .arg_idx = 2, .flags = 3, .size = ts*ts * sizeof(float)};
 					__mcxx_copies[2] = tmp_2;
 					__mcxx_ptr_t<float> __mcxx_dep_0;
-					__mcxx_dep_0 = dep_addr(A, k, i, nt, tb);
+					__mcxx_dep_0 = Ablock;
 					__mcxx_deps[0] = 1LLU << 58 | __mcxx_dep_0.val;
 					__mcxx_ptr_t<float> __mcxx_dep_1;
-					__mcxx_dep_1 = dep_addr(A, k, j, nt, tb);
+					__mcxx_dep_1 = Bblock;
 					__mcxx_deps[1] = 1LLU << 58 | __mcxx_dep_1.val;
 					__mcxx_ptr_t<float> __mcxx_dep_2;
-					__mcxx_dep_2 = dep_addr(A, j, i, nt, tb);
+					__mcxx_dep_2 = Cblock;
 					__mcxx_deps[2] = 3LLU << 58 | __mcxx_dep_2.val;
 					__data_owner_info_t data_owners[2];
-					const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=calc_owner(k, i, __ompif_size)};
-					const __data_owner_info_t owner_1 = {.size=ts*ts*sizeof(float), .owner=calc_owner(k, j, __ompif_size)};
+					const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=data_owner0};
+					const __data_owner_info_t owner_1 = {.size=ts*ts*sizeof(float), .owner=data_owner1};
 					data_owners[0] = owner_0;
 					data_owners[1] = owner_1;
 					ap_uint<2> n_data_owners;
@@ -170,34 +231,47 @@ void cholesky_blocked_moved(const unsigned long long int nt, __mcxx_ptr_t<float>
 						n_data_owners = 1;
 					else
 						n_data_owners = 0;
-					mcxx_task_create(6757388164LLU, 255, 3, __mcxx_args, 3, __mcxx_deps, 3, __mcxx_copies, n_data_owners, data_owners, mcxx_outPort, __ompif_rank, __ompif_size, calc_owner(j, i, __ompif_size));
+					mcxx_task_create(6757388164LLU, 255, 3, __mcxx_args, 3, __mcxx_deps, 3, __mcxx_copies, n_data_owners, data_owners, mcxx_outPort, task_owner);
 				}
 			}
 			{
+				const unsigned char task_owner = calc_owner(i, i, s);
+				const unsigned char data_owner0 = calc_owner(i, k, s);
+				__mcxx_ptr_t<float> Ablock, Bblock;
+				if (task_owner == r && data_owner0 != r)
+					Ablock = recv_buffer + ((k%recv_buffer_size)*nt + i)*ts*ts;
+				else if (data_owner0 == r) {
+					uint A_idx = get_block_idx(i, k, nt, r, s, cfidx, ndiags, remstart);
+					Ablock = A + A_idx*ts*ts;
+				}
+				if (task_owner == r) {
+					uint B_idx = get_block_idx(i, i, nt, r, s, cfidx, ndiags, remstart);
+					Bblock = A + B_idx*ts*ts;
+				}
 				unsigned long long int __mcxx_args[2L];
 				unsigned long long int __mcxx_deps[2L];
 				__fpga_copyinfo_t __mcxx_copies[2L];
 				__mcxx_ptr_t<float> __mcxx_arg_0;
-				__mcxx_arg_0 = dep_addr(A, k, i, nt, tb);
+				__mcxx_arg_0 = Ablock;
 				__mcxx_args[0] = __mcxx_arg_0.val;
 				const __fpga_copyinfo_t tmp_0 = {.copy_address = __mcxx_arg_0.val, .arg_idx = 0, .flags = 1, .size = ts*ts * sizeof(const float)};
 				__mcxx_copies[0] = tmp_0;
 				__mcxx_ptr_t<float> __mcxx_arg_1;
-				__mcxx_arg_1 = dep_addr(A, i, i, nt, tb);
+				__mcxx_arg_1 = Bblock;
 				__mcxx_args[1] = __mcxx_arg_1.val;
 				const __fpga_copyinfo_t tmp_1 = {.copy_address = __mcxx_arg_1.val, .arg_idx = 1, .flags = 3, .size = ts*ts * sizeof(float)};
 				__mcxx_copies[1] = tmp_1;
 				__mcxx_ptr_t<float> __mcxx_dep_0;
-				__mcxx_dep_0 = dep_addr(A, k, i, nt, tb);
+				__mcxx_dep_0 = Ablock;
 				__mcxx_deps[0] = 1LLU << 58 | __mcxx_dep_0.val;
 				__mcxx_ptr_t<float> __mcxx_dep_1;
-				__mcxx_dep_1 = dep_addr(A, i, i, nt, tb);
+				__mcxx_dep_1 = Bblock;
 				__mcxx_deps[1] = 3LLU << 58 | __mcxx_dep_1.val;
 				__data_owner_info_t data_owners[1];
-				const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=calc_owner(k, i, __ompif_size)};
+				const __data_owner_info_t owner_0 = {.size=ts*ts*sizeof(float), .owner=data_owner0};
 				data_owners[0] = owner_0;
 				const ap_uint<1> n_data_owners = i-(k+1) < __ompif_size ? 1 : 0;
-				mcxx_task_create(6757855513LLU, 255, 2, __mcxx_args, 2, __mcxx_deps, 2, __mcxx_copies, n_data_owners, data_owners, mcxx_outPort, __ompif_rank, __ompif_size, calc_owner(i, i, __ompif_size));
+				mcxx_task_create(6757855513LLU, 255, 2, __mcxx_args, 2, __mcxx_deps, 2, __mcxx_copies, n_data_owners, data_owners, mcxx_outPort, task_owner);
 			}
 		}
 	}
@@ -261,13 +335,15 @@ void cholesky_blocked_wrapper(hls::stream<ap_uint<64> >& mcxx_inPort, hls::strea
 	}
 }
 
-void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, const ap_uint<8> numArgs, const unsigned long long int args[], const ap_uint<8> numDeps, const unsigned long long int deps[], const ap_uint<8> numCopies, const __fpga_copyinfo_t copies[], hls::stream<mcxx_outaxis>& mcxx_outPort) {
+void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, const ap_uint<8> numArgs, const unsigned long long int args[], const ap_uint<8> numDeps, const unsigned long long int deps[], const ap_uint<8> numCopies, const __fpga_copyinfo_t copies[], const ap_uint<8> numDataOwners, __data_owner_info_t data_owners[], hls::stream<mcxx_outaxis>& mcxx_outPort, unsigned char ompif_rank, unsigned char ompif_size, unsigned char owner) {
 #pragma HLS inline
 	const ap_uint<2> destId = 2;
 	ap_uint<64> tmp;
 	tmp(15,8)  = numArgs;
 	tmp(23,16) = numDeps;
 	tmp(31,24) = numCopies;
+	tmp(39,32) = numDataOwners;
+	tmp(47,40) = owner;
 	mcxx_write_out_port(tmp, destId, 0, mcxx_outPort);
 	mcxx_write_out_port(__mcxx_taskId, destId, 0, mcxx_outPort);
 	tmp(47,40) = instanceNum;
@@ -275,6 +351,12 @@ void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, cons
 	mcxx_write_out_port(tmp, destId, 0, mcxx_outPort);
 	for (ap_uint<4> i = 0; i < numDeps(3,0); ++i) {
 #pragma HLS unroll
+		if (i < numDataOwners) {
+			ap_uint<64> ownerdata;
+			ownerdata(7,0) = data_owners[i].owner;
+			ownerdata(63,32) = data_owners[i].size;
+			mcxx_write_out_port(ownerdata, destId, 0, mcxx_outPort);
+		}
 		mcxx_write_out_port(deps[i], destId, numArgs == 0 && numCopies == 0 && i == numDeps-1, mcxx_outPort);
 	}
 	for (ap_uint<4> i = 0; i < numCopies(3,0); ++i) {
@@ -288,56 +370,6 @@ void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, cons
 	for (ap_uint<4> i = 0; i < numArgs(3,0); ++i) {
 #pragma HLS unroll
 		mcxx_write_out_port(args[i], destId, i == numArgs-1, mcxx_outPort);
-	}
-}
-
-void OMPIF_Send(const void *data, unsigned int size, int destination, const ap_uint<8> numDeps, const unsigned long long int deps[], hls::stream<mcxx_outaxis>& mcxx_outPort) {
-#pragma HLS inline
-	ap_uint<64> command;
-	command(7,0) = 0; //SEND
-	command(15,8) = 0; //tag
-	command(23,16) = destination;
-	command(63, 24) = (unsigned long long int)data;
-	unsigned long long int args[2] = {command, (unsigned long long int)size};
-	mcxx_task_create(4294967299LU, 0xFF, 2, args, numDeps, deps, 0, 0, mcxx_outPort);
-}
-void OMPIF_Recv(void *data, unsigned int size, int source, const ap_uint<8> numDeps, const unsigned long long int deps[], hls::stream<mcxx_outaxis>& mcxx_outPort) {
-#pragma HLS inline
-	ap_uint<64> command;
-	command(7,0) = 0; //RECV
-	command(15,8) = 0;
-	command(23,16) = source;
-	command(63, 24) = (unsigned long long int)data;
-	unsigned long long int args[2] = {command, (unsigned long long int)size};
-	mcxx_task_create(4294967300LU, 0xFF, 2, args, numDeps, deps, 0, 0, mcxx_outPort);
-}
-
-void mcxx_task_create(const ap_uint<64> type, const ap_uint<8> instanceNum, const ap_uint<8> numArgs, const unsigned long long int args[], const ap_uint<8> numDeps, const unsigned long long int deps[], const ap_uint<8> numCopies, const __fpga_copyinfo_t copies[], int numDataOwners, __data_owner_info_t data_owners[], hls::stream<mcxx_outaxis>& mcxx_outPort, unsigned char ompif_rank, unsigned char ompif_size, unsigned char owner) {
-#pragma HLS inline
-	const ap_uint<2> destId = 2;
-	const unsigned char rank = ompif_rank;
-
-	auto_sendrecv:
-	for (ap_uint<4> i = 0; i < numDataOwners; ++i) {
-		const ap_uint<64> depword = deps[i];
-#pragma HLS unroll
-		const bool is_in = depword[58];
-		const unsigned char data_owner = data_owners[i].owner;
-		const unsigned int size = data_owners[i].size;
-		if (owner != rank && data_owners[i].owner == rank && is_in) {
-			const unsigned long long addr = depword(55,0);
-			const unsigned long long int dep[2] = {depword(55,0) | (1LLU << 58), 0x0000100000000000LLU | (3LLU << 58)};
-			OMPIF_Send((void*)addr, size, owner, 2, dep, mcxx_outPort);
-		}
-		else if (owner == rank && data_owner != rank && is_in) {
-			const unsigned long long addr = depword(55,0);
-			const unsigned long long int dep[2] = {depword(55,0) | (2LLU << 58), 0x0000200000000000LLU | (3LLU << 58)};
-			OMPIF_Recv((void*)addr, size, data_owner, 2, dep, mcxx_outPort);
-		}
-	}
-
-	if (owner == rank) {
-		mcxx_task_create(type, instanceNum, numArgs, args, numDeps, deps, numCopies, copies, mcxx_outPort);
 	}
 }
 
