@@ -63,7 +63,7 @@
 
 const unsigned int FPGA_GEMM_II = FPGA_GEMM_LOOP_II;
 const unsigned int FPGA_OTHER_II = FPGA_OTHER_LOOP_II;
-const int ts = BLOCK_SIZE; // tile size
+const unsigned long long int ts = BLOCK_SIZE; // tile size
 const unsigned int FPGA_PWIDTH = FPGA_MEMORY_PORT_WIDTH;
 const unsigned int SYRK_NUMACCS = SYRK_NUM_ACCS;
 const unsigned int GEMM_NUMACCS = GEMM_NUM_ACCS;
@@ -146,11 +146,20 @@ static void gather_block(const int N, type_t *Alin, type_t *A)
    }
 }
 
-static void scatter_block(const int N, type_t *A, type_t *Alin)
+static void scatter_block(const int N, const type_t *A, type_t *Alin)
 {
    for (int i = 0; i < ts; i++) {
       for (int j = 0; j < ts; j++) {
          Alin[i*N + j] = A[i*ts + j];
+      }
+   }
+}
+
+static void scatter_transposed_block(const int N, const type_t *A, type_t *Alin)
+{
+   for (int i = 0; i < ts; i++) {
+      for (int j = 0; j < ts; j++) {
+         Alin[i*N + j] = A[j*ts + i];
       }
    }
 }
