@@ -239,10 +239,10 @@ In fact, you can visualize how many blocks you are counting.
 
 One solution to this problem is to subtract the extra part we don't want to count.
 In this case, the number of extra blocks we are counting grows by 1 between consecutive anti-diagonals.
-Therefore, the resulting formula is $d/2 - (n-d+1)$.
+Therefore, the resulting formula is $d/2 - (d-n+1)$.
 In summary, we have:
 * $d/2 + 1$ if $d <= n$ and truncating the decimals.
-* $d/2 + 1 - (n-d+1)$ if $d > n$ and truncating the decimals.
+* $d/2 + 1 - (d-n+1)$ if $d > n$ and truncating the decimals.
 
 Now, we can use this formula to calculate how many blocks there are stored from anti-diagonal $0$ to $d$.
 I.e. the memory offset of anti-diagonal $d+1$.
@@ -256,11 +256,77 @@ $$\sum_{i=0}^{d} i/2+1$$
 
 In this summatory, $d$ is included, so we can simplify the formula like:
 
-$$(\sum_{i=0}^{d} i)/2 + d$$
+$$(\sum_{i=0}^{d} i)/2 + d+1$$
 
-And then, remove the summatory:
+And then, remove the summatory and simplify the formula:
 
-$$(\frac{n*(n+1)}{2})/2 + d$$
+$$\frac{d*(d+1)}{4} + d+1$$
+
+However, this simplification introduces a new problem.
+This fraction doesn't truncate the decimals of the divisions inside the summatory.
+I.e. even when truncating the division by 4, the formula is still counting decimals that we don't want to include.
+For example, when $d=5$, the formula would give us $1 + 1.5 + 2 + 2.5 + 3 + 3.5 = 13.5$, but the actual result is $12$.
+Therefore, we have to subtract those $0.5$ units from the result.
+We call this the correction factor.
+The number of $0.5$ units we add is equal to $(d+1)/2$, therefore the quantity we have to subtract is $(d+1)/4$.
+Here we can also do integer division and truncate the result, because we only care about the number of 1s added to the final result, and the trailing $0.5$ is already removed by the original formula itself.
+Finally, we have the formula:
+
+$$\frac{d*(d+1)}{4} + d+1 - \frac{d+1}{4}$$
+
+Now, we can go for the final formula when $d > n$.
+Lets go back some steps with the summatory:
+
+$$(\sum_{i=0}^{d} i/2+1) - (\sum_{i=0}^{d-n} i+1)$$
+
+Result after simplification is:
+
+$$\frac{d*(d+1)}{4} + d+1 - \frac{d+1}{4} - (\frac{(d-n)*(d-n+1)}{2} + (d-n+1))$$
+
+The only part left is taking into account there are multiple ranks.
+We apply the same idea, however we have to change some parts of the formula.
+Imagine the previous example with 3 ranks, on rank 1 we would have:
+
+![cholesky_imp-Page-5](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/3a584b9e-78e3-4ffa-acd2-7ddb7916544b)
+
+In this case, we can see that the summatory doesn't start at anti-diagonal 0, it starts at the rank index $r$, and instead of jumping from one anti-diagonal to the next one, it is jumping by the number of ranks $s$.
+In this example, anti-diagonal $4$ would be stored locally in anti-diagonal $1$ of rank 1, and thus we would have to sum $(1/2+1)+(4/2+1)$.
+Again, starting only on the first half of the triangle, we would have the summatory like this:
+
+$$\sum_{i=0}^{d} \frac{r+i*s}{2} + 1$$
+
+This time, $d$ refers to the local anti-diagonal, which can be calculated from the global anti-diagonal by dividing with the total number of ranks $d/s$.
+You can see that we get the same formula as the beggining if $s=1$ and $r=0$.
+However, the correction factor now depends also on $r$ and $s$.
+In the case of rank $1$, the extra $0.5$ that we don't want to count would be added like this in the summatory: $0.5 + 0 + 0.5 + 0 + 0.5 + 0 + 0.5$...
+Now the $0.5$ starts in the first unit of the summatory, which changes slightly the correction factor.
+This is because when $d+1$ is odd, we are counting an extra $0.5$, which may generate an integer unit not counted in the old correction factor $(d+1)/4$.
+For example, when $d=2$ the correction factor would be $(2+1)/4 = 0$ but there are two $0.5$.
+To correct this, we have to adjust the formula to $(d+2)/4$.
+This depends on if $r$ and $s$ are even or odd, resulting in 4 different possibilities:
+
+* If $r$ is even and $s$ is even, we are only adding numbers that are multiple of 2, so the correction factor is $0$.
+* If $r$ is even and $s$ is odd, we have the first explained case and the correction factor is $(d+1)/4$.
+* If $r$ is odd and $s$ is even, we are always adding numbers that are not multiple of 2, so all add a $0.5$. The correction factor is $(d+1)/2$.
+* If $r$ is odd and $s$ is odd, we have the second explained case and the correction factor is $(d+2)/4$.
+
+From now on, we call the correction factor $cf$ in the formulas.
+After removing the summatory and simplifying, we would have the final formula:
+
+$$\frac{2* r*(d+1) + s* d*(d+1)}{4} + d+1 - cf$$
+
+We only have one case left, when $d > n$ being $d$ the global anti-diagonal.
+In the previous case, the initial offset of the summatory was easy to get because it was the rank $r$ itself.
+However, for the second summatory is no as straightforward.
+This depends on who is the owner of the first anti-diagonal that is greater than $n$.
+In the case of the first summatory it is always $0$ because that's how we designed the data decomposition.
+However, the *mirror* triangle (the one we want to subtract) first anti-diagonal depends on the number of blocks in a single dimension of the matrix.
+In the example there are $6$ blocks and $3$ ranks, and since one is multiple of the other, the offset matches, but if there are $7$ blocks, the first anti-diagonal greater than $n$ would belong to rank $1$.
+Therefore, we have to find the distance between the owner of the first anti-diagonal of the *mirror* triangle and rank $r$.
+This owner is $n \bmod s$, so we have two cases:
+
+* If $r >= n \bmod s$, distance is $r - (n \bmod s)$
+* If $r < n \bmod s$, distance is $r+s - (n \bmod s)$
 
 ## FPGA implementation
 
