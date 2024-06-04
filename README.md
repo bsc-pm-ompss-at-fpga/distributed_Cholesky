@@ -181,23 +181,46 @@ You can see that in the last figure, but for completeness here is an example of 
 
 ![cholesky_imp (1)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/fdd4b5aa-2258-4337-af64-cad3451b8d98)
 
+### Memory distribution
 
-### Memory optimization
+The idea we use is very simple, but complex to implement: Every rank has allocated in memory a proportional part of the matrix.
+I.e. if the matrix is $x$ bytes, we want that every rank only allocates $x/nranks$ bytes.
+This is simple with a square matrix and a more friendly data decomposition, but we are doing a cyclic distribution on both rows and columns over a symmetrical square matrix.
+Before going into details, lets go step by step.
+First, lets see a regular Cholesky matrix stored by columns in memory.
 
-As you have seen in the last figure and in the code, Cholesky only reads and writes the lower triangle of the matrix because this one is symmetric.
-Since the matrix dimensions must be square, the size increases very fast, and with this implementation we allocate the whole matrix on every rank.
-A small optimization that we do is only allocate the useful part, i.e. the lower triangle of the block matrix.
-This is not exactly the lower triangle of the whole matrix, because on the blocks of the diagonal there are elements of the upper triangle, but we save close to 2x memory by doing this.
+![cholesky_imp-Page-3](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/cedba3e6-b39d-40d2-9ce1-f2a8500b7e53)
 
-![cholesky_imp (4)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/7c717c5c-12b7-4d84-b2c0-3ea1f57fea93)
+The numbers represent matrix coordinates $(i,j)$ and the colors represent the block they belong to.
+In this figure we have a 4x4 matrix divided in blocks of 2x2.
+As you can see, the blocks are not consecutive in memory, as the distance between two rows is 4.
+Another fact that we have to take into account in Cholesky is that the algorithm only uses the lower triangular matrix (it is symmetric).
+Therefore, the first step is so store the matrix by blocks, and only store blocks that belong to the lower triangle.
 
-This image show how we store the matrix in memory.
-First there is the original matrix, the numbers are coordinates to each element, and the colors represent the block each element belongs to.
-Just below that, the linear representation in memory stored in column-major order.
-Then, we can see the three blocks that are actually used by Cholesky, thus, we only store that part in memory.
-Besides only storing the needed blocks, these are stored consecutive in memory in column-major order for elements in a block, and for different blocks.
-This is needed because as we explained earlier, each kernel expects to have the block consecutive in memory.
-Also, loading an entire block from memory is faster because we can do a single copy instead of doing one per row.
+![cholesky_imp-Page-3](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/e01750b6-9f85-44a4-9938-749190ff39a9)
+
+This memory layout is much better for the Cholesky algorithm.
+Every block is stored consecutive in memory by columns.
+Therefore, with a single pointer to the block, we can access it as a small isolated matrix of 2x2 without knowing the real dimensions of the original matrix.
+Now, lets see how every block would be assigned to each rank.
+From now on, we only represent blocks in the figures, so each square is a full block, not an element of the matrix.
+
+![cholesky_imp-Page-5](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/8cc96839-e6b2-4ac5-b0e8-839ff0f8e0cf)
+
+The numbers represent the rank owner of that block, as well as the colors.
+The first question is how to allocate the blocks on each rank.
+I.e. after the first block, what should go next, the  block on the right, bottom, left?
+In the figure it is not obvious because there are only 3 blocks.
+But the general idea is to store one anti-diagonal of blocks after the other, from top-left to bottom-right.
+Then, each anti-diagonal store it from bottom-left to top-right.
+
+![cholesky_imp-Page-5 (1)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/5ba07c23-5a09-45fd-ad20-5aba2a3e3ca5)
+
+This figure represents a bit better the memory layout of the previous example with 3 ranks.
+Now, the numbers on each block represent the *block* coordinates, and the color represents the rank owner.
+As you can see, in memory each rank only stores the blocks owned by itself, with the aforementioned order.
+This memory layout is very useful because it allow us to get the memory address of any block from the block coordinates with a generic formula.
+For example, for rank 0, with just some arithmetic operations we can learn that block $(3,0)$ is in address $1$ in memory, or that block $(3,3)$ is in address $3$.
 
 ## FPGA implementation
 
