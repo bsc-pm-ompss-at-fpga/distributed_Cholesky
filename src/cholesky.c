@@ -215,6 +215,113 @@ void cholesky_blocked(const int nt, type_t* A)
    #pragma oss taskwait
 }
 
+static inline size_t get_total_blocks(int nt, int r, int s)
+{
+   int cf;
+   int n = (2*nt-1)/s + (r < (2*nt-1)%s ? 1 : 0) - 1;
+   int globaln = r + n*s;
+   if (s%2 == 0 && r%2 == 0) {
+      cf = 0;
+   }
+   else if (s%2 == 0 && r%2 == 1) {
+      cf = (n+1)/2;
+   }
+   else if (s%2 == 1 && r%2 == 0) {
+      cf = (n+1)/4;
+   } else { //s%2 == 1 && r%2 == 1
+      cf = (n+2)/4;
+   }
+   int rem = n - (nt/s + (r < nt%s ? 1 : 0));
+   int remstart = r >= nt%s ? r-nt%s : r+s - nt%s;
+   int remblocks = (rem+1)*remstart + s*((rem*(rem+1))/2) + (rem+1);
+   int nblocks = (s*n*(n+1) + 2*(n+1)*r)/4 + (n+1) - cf - (globaln >= nt ? remblocks : 0);
+   return nblocks;
+}
+
+static void triangular_to_linear(type_t* triangular, type_t* linear, int n, int nt)
+{
+   int diag_offset = 0;
+   for (int d = 0; d < 2*nt-1; ++d) {
+      int blocks = d/2 + 1 - (d >= nt ? d-nt + 1 : 0);
+      int i = d >= nt ? nt-1 : d;
+      int j = d >= nt ? d-nt+1 : 0;
+      type_t* block_array;
+      block_array = triangular + diag_offset*ts*ts;
+      diag_offset += blocks;
+      for (int b = 0; b < blocks; ++b) {
+         const type_t* triangular_b = block_array + b*ts*ts;
+         scatter_block(n, triangular_b, linear + j*ts*n + i*ts); //linear matrix is column major
+         if (i != j) scatter_transposed_block(n, triangular_b, linear + i*ts*n + j*ts);
+         --i, ++j;
+      }
+   }
+}
+
+void initialize_matrix_blocked_lower(const int n, type_t *matrix, int parse)
+{
+   // This code was designed for an MPI application, every rank would allocate and initialize its own
+   // part of the matrix. In this version, the CPU allocates and initializes the whole matrix.
+   // If the CPU doesn't have enough memory for the full matrix, a simple solution is to allocate just the space
+   // for the FPGA with more blocks, and initialize the part corresponding to each FPGA by changing this
+   // rank and size parameters.
+   int rank = 0;
+   int size = 1;
+
+   //ISEED is INTEGER array, dimension (4)
+   //On entry, the seed of the random number generator; the array
+   //elements must be between 0 and 4095, and ISEED(4) must be odd.
+   //On exit, the seed is updated.
+   //int ISEED[4] = {0,0,0,1};
+   const int intONE=1;
+
+   const int nt = n/ts;
+
+   const int tb = get_total_blocks(nt, rank, size);
+
+#ifdef VERBOSE
+   if (rank == 0 && !parse)
+      printf("Initializing matrix with random values ...\n");
+#endif
+
+   const long long msize = tb*ts*ts;
+   int cpus = nanos6_get_num_cpus();
+   const long long bsize = msize/cpus < 1024 ? 1024 : (msize/cpus > 2147483648ull ? 2147483648ull : msize/cpus);
+
+   for (long long i = 0; i < msize; i += bsize) {
+      #pragma oss task firstprivate(i)
+      {
+         int ISEED[4] = {0, i >> 32, i & 0xFFFFFFFF, 1};
+         int final_size = msize-i > bsize ? bsize : msize-i; 
+         larnv(&intONE, &ISEED[0], &final_size, matrix + i);
+      }
+   }
+   #pragma oss taskwait
+
+   type_t a = (type_t)n;
+   int diag_offset = 0;
+   for (int d = rank; d < 2*nt-1; d += size) {
+      int blocks = d/2 + 1 - (d >= nt ? d-nt + 1 : 0);
+      for (int b = 0; b < blocks; b++) {
+         //#pragma oss task firstprivate(diag_offset, b, blocks, d)
+         {
+         type_t* bmat = matrix + (diag_offset + b)*ts*ts;
+         for (int j = 0; j < ts; ++j) {
+            for (int i = (d%2 == 0 && b == blocks-1 ? j : 0); i < ts; ++i) {
+               bmat[j*ts + i] *= 2;
+               if (d%2 == 0 && b == blocks-1) {//diagonal block
+                  if (i == j)
+                     bmat[j*ts + i] += a;
+                  else
+                     bmat[i*ts + j] = bmat[j*ts + i];
+               }
+            }
+         }
+         }
+      }
+      diag_offset += blocks;
+   }
+}
+
 // Robust Check the factorization of the matrix A2
 static int check_factorization(int N, type_t *A1, type_t *A2, int LDA, char uplo)
 {
@@ -291,92 +398,6 @@ static int check_factorization(int N, type_t *A1, type_t *A2, int LDA, char uplo
    return info_factorization;
 }
 
-void initialize_matrix(const unsigned long long int n, type_t *matrix, int parse)
-{
-   int ISEED[4] = {0,0,0,1};
-   int intONE=1;
-
-#ifdef VERBOSE
-   if (!parse)
-      printf("Initializing matrix with random values ...\n");
-#endif
-
-   for (unsigned long long int i = 0; i < n*n; i+=n) {
-      larnv(&intONE, &ISEED[0], (const int32_t*)&n, &matrix[i]);
-   }
-
-   type_t a = (type_t)n;
-   for (int r=0; r<n; r += ts) {
-      #pragma oss task firstprivate(r, a)
-      for (int i = r; i < r+ts; ++i) {
-      for (int j=i+1; j<n; j++) {
-         matrix[j*n + i] = matrix[j*n + i] + matrix[i*n + j];
-         matrix[i*n + j] = matrix[j*n + i];
-         matrix[i*n + j] = matrix[i*n + j] + matrix[j*n + i];
-         matrix[j*n + i] = matrix[i*n + j];
-      }
-      matrix[i*n + i] = matrix[i*n + i] + matrix[i*n + i];
-      matrix[i*n + i] = matrix[i*n + i];
-      //add_to_diag
-      matrix[i*n + i] += a;
-      }
-   }
-   #pragma oss taskwait
-}
-
-void initialize_matrix_blocked(const long long n, const long long nt, type_t *matrix, int parse)
-{
-   int ISEED[4] = {0,0,0,1};
-   int intONE=1;
-
-#ifdef VERBOSE
-   if (!parse)
-      printf("Initializing matrix with random values ...\n");
-#endif
-
-   type_t* tmprow = (type_t*)malloc(n*sizeof(type_t));
-
-   int cpus = nanos6_get_num_cpus();
-   int block = n/cpus;
-
-   for (long long i = 0; i < n; ++i) {
-      larnv(&intONE, &ISEED[0], (const int32_t*)&n, tmprow);
-      for (long long c = 0; c < n; c += block) {
-      #pragma oss task firstprivate(c, i)
-      for (long long j = c; j < c+block && j < n; ++j) {
-         int bi = i/ts;
-         int bj = j/ts;
-         matrix[bi*(ts*ts*nt) + bj*(ts*ts) + (i%ts)*ts + j%ts] = tmprow[j];
-      }
-      }
-      #pragma oss taskwait
-   }
-
-   free(tmprow);
-
-   block = ts > n/(cpus*2) ? ts : n/(cpus*2); //To improve load balancing
-   type_t a = (type_t)n;
-
-   for (int r = 0; r < n; r += block) {
-   #pragma oss task firstprivate(r, a)
-   for (int i = r; i < r+block && i < n; ++i) {
-      long long bi = i/ts;
-      for (int j=i+1; j<n; j++) {
-         long long bj = j/ts;
-         long long ji = bj*(ts*ts*nt) + bi*(ts*ts) + (j%ts)*ts + i%ts;
-         long long ij = bi*(ts*ts*nt) + bj*(ts*ts) + (i%ts)*ts + j%ts;
-
-         matrix[ij] = (matrix[ji]+matrix[ij])*2;
-         matrix[ji] = matrix[ij];
-      }
-      long long ii = bi*(ts*ts*nt) + bi*(ts*ts) + (i%ts)*ts + i%ts;
-      //add_to_diag
-      matrix[ii] = matrix[ii]*2 + a;
-   }
-   }
-   #pragma oss taskwait
-}
-
 int main(int argc, char* argv[])
 {
    char *result[3] = {"n/a","sucessful","UNSUCCESSFUL"};
@@ -403,26 +424,21 @@ int main(int argc, char* argv[])
    // Allocate matrix
    type_t * matrix;
    // Allocate blocked matrix
-   type_t *Ah[nt][nt];
    type_t *Ab;
+   type_t *recv_buffer;
    const size_t s = ts * ts * sizeof(type_t);
-   Ab = malloc(s*nt*nt);
-   if (Ab == NULL) {
+   const size_t tb = get_total_blocks(nt, 0, 1);
+   Ab = malloc(tb*s);
+   recv_buffer = malloc(2*nt*s);
+   if (Ab == NULL || recv_buffer == NULL) {
       fprintf(stderr, "Could not allocate matrix\n");
       return 1;
-   }
-
-   for (int i = 0; i < nt; i++) {
-      for (int j = 0; j < nt; j++) {
-         Ah[i][j] = Ab + (i*nt + j)*ts*ts;
-      }
    }
 
    double tIniStart = wall_time();
 
    // Init matrix
-   //initialize_matrix(n, matrix, parse);
-   initialize_matrix_blocked(n, nt, Ab, parse);
+   initialize_matrix_blocked_lower(n, Ab, parse);
 
    type_t * original_matrix = NULL;
    if ( check == 1 ) {
@@ -432,10 +448,9 @@ int main(int argc, char* argv[])
          fprintf(stderr, "Could not allocate original matrix\n");
          return 1;
       }
-      convert_to_linear(nt, n, Ah, (type_t (*)[n]) original_matrix);
+      triangular_to_linear(Ab, original_matrix, n, nt);
+      //print_matrix(original_matrix, n);
    }
-
-   //convert_to_blocks(nt, n, (type_t(*)[n]) matrix, Ah);
 
    const double tEndStart = wall_time();
 
@@ -444,30 +459,40 @@ int main(int argc, char* argv[])
       printf ("Executing ...\n");
 #endif
 
-   const size_t tb = (nt*(nt+1))/2;
-   nanos6_dist_map_address(Ab, tb*s);
+   unsigned int max_tb = get_total_blocks(nt, 0, nranks);
+   for (int i = 1; i < nranks; ++i) {
+      unsigned int blocks = get_total_blocks(nt, i, nranks);
+      if (blocks > max_tb)
+         max_tb = blocks;
+   }
+   nanos6_dist_map_address(Ab, max_tb*s);
+   nanos6_dist_map_address(recv_buffer, 2*nt*s);
 
-   nanos6_dist_memcpy_info_t* memcpy_infos = (nanos6_dist_memcpy_info_t*)malloc(tb*sizeof(nanos6_dist_memcpy_info_t));
+   nanos6_dist_memcpy_info_t* memcpy_infos = (nanos6_dist_memcpy_info_t*)malloc((2*nt-1)*sizeof(nanos6_dist_memcpy_info_t));
    if (memcpy_infos == NULL) {
       fprintf(stderr, "Could not allocate memcpy infos\n");
       return 1;
    }
 
    const double tBeginCopy = wall_time();
-   int idx = 0;
-   for (unsigned long long int i = 0; i < nt; ++i) {
-      for (unsigned long long int j = i; j < nt; ++j) {
-          unsigned long long int irem = nt - i;
-          memcpy_infos[idx].size = s;
-          memcpy_infos[idx].sendOffset = (i*nt + j)*s;
-          memcpy_infos[idx].recvOffset = (tb - (irem*(irem+1))/2 + j - i)*s;
-          memcpy_infos[idx].devId = (i+j)%nranks;
-          ++idx;
-      }
+   
+   unsigned int diag_offset = 0;
+   unsigned int *r_diag_offset = (unsigned int*)malloc(nranks*sizeof(unsigned int));
+   memset(r_diag_offset, 0, nranks*sizeof(unsigned int));
+   for (int d = 0; d < 2*nt-1; ++d) {
+      int blocks = d/2 + 1 - (d >= nt ? d-nt + 1 : 0);
+      int r = d%nranks;
+      memcpy_infos[d].size = blocks*s;
+      memcpy_infos[d].sendOffset = diag_offset*s;
+      memcpy_infos[d].recvOffset = r_diag_offset[r]*s;
+      memcpy_infos[d].devId = r;
+      r_diag_offset[r] += blocks;
+      diag_offset += blocks;
    }
-   nanos6_dist_memcpy_vector(Ab, tb, memcpy_infos, NANOS6_DIST_COPY_TO);
+   nanos6_dist_memcpy_vector(Ab, 2*nt-1, memcpy_infos, NANOS6_DIST_COPY_TO);
    const double tEndCopy = wall_time();
    const double tElapsedCopy = tEndCopy-tBeginCopy;
+   free(r_diag_offset);
    free(memcpy_infos);
 
 #ifdef VERBOSE
@@ -476,7 +501,7 @@ int main(int argc, char* argv[])
 
    const double tIniExec = wall_time();
    //Performance execution
-   cholesky_blocked(nt, Ab);
+   cholesky_blocked(nt, Ab, recv_buffer);
    #pragma oss taskwait
    const double tEndExec = wall_time();
 
@@ -492,18 +517,23 @@ int main(int argc, char* argv[])
 
    if ( check == 1 ) {
       tIniToLinear = wall_time();
-      for (int i = 0; i < nt; ++i) {
-         for (int j = i; j < nt; ++j) {
-            unsigned long long int irem = nt - i;
-            nanos6_dist_memcpy_from_device((i+j)%nranks, Ab, s, (tb - (irem*(irem+1))/2 + j - i)*s, (i*nt + j)*s);
-         }
+      unsigned int diag_offset = 0;
+      unsigned int *r_diag_offset = (unsigned int*)malloc(nranks*sizeof(unsigned int));
+      memset(r_diag_offset, 0, nranks*sizeof(unsigned int));
+      for (unsigned int d = 0; d < 2*nt-1; ++d) {
+         unsigned int blocks = d/2 + 1 - (d >= nt ? d-nt + 1 : 0);
+         unsigned int r = d%nranks;
+         nanos6_dist_memcpy_from_device(r, Ab, blocks*s, r_diag_offset[r]*s, diag_offset*s);
+         r_diag_offset[r] += blocks;
+         diag_offset += blocks;
       }
+      free(r_diag_offset);
       matrix = (type_t*)malloc(n*n*sizeof(type_t));
       if (matrix == NULL) {
           fprintf(stderr, "Could not allocate auxiliar matrix\n");
           return 1;
       }
-      convert_to_linear(nt, n, Ah, (type_t (*)[n]) matrix);
+      triangular_to_linear(Ab, matrix, n, nt);
       tEndToLinear = wall_time();
       tIniCheck = tEndToLinear;
       const char uplo = 'L';
@@ -538,9 +568,6 @@ int main(int argc, char* argv[])
 
    // Free blocked matrix
    free(Ab);
-
-   // Free matrix
-   //free(matrix);
 
    return check == 10 ? 1 : 0;
 }
