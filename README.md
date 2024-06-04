@@ -222,6 +222,46 @@ As you can see, in memory each rank only stores the blocks owned by itself, with
 This memory layout is very useful because it allow us to get the memory address of any block from the block coordinates with a generic formula.
 For example, for rank 0, with just some arithmetic operations we can learn that block $(3,0)$ is in address $1$ in memory, or that block $(3,3)$ is in address $3$.
 
+For that, we start with how to calculate the number of elements in a given anti-diagonal $d$.
+The answer is $d/2 + 1$ when $d > n$, being $n$ the number of blocks in a single dimension of the matrix, and with integer division, i.e. truncating the decimals.
+
+![cholesky_imp-Page-5 (2)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/05f4453a-5068-4e2b-8a32-899b42df57bf)
+
+This is a bigger example.
+The numbers represent anti-diagonal $d$, as well as the colors.
+Anti-diagonals that satisfy the condition $d < n$ have light colors and black font, while the rest have darker colors and white font.
+You can see that every 2 anti-diagonals, it grows by 1 block.
+However, this only works for half of the matrix.
+After that, if you use the same formula you get more blocks.
+In fact, you can visualize how many blocks you are counting.
+
+![cholesky_imp-Page-5 (3)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/2e2c7197-4e41-42c5-acd7-44ad459c872d)
+
+One solution to this problem is to subtract the extra part we don't want to count.
+In this case, the number of extra blocks we are counting grows by 1 between consecutive anti-diagonals.
+Therefore, the resulting formula is $d/2 - (n-d+1)$.
+In summary, we have:
+* $d/2 + 1$ if $d <= n$ and truncating the decimals.
+* $d/2 + 1 - (n-d+1)$ if $d > n$ and truncating the decimals.
+
+Now, we can use this formula to calculate how many blocks there are stored from anti-diagonal $0$ to $d$.
+I.e. the memory offset of anti-diagonal $d+1$.
+For the moment, we assume there is only one rank, so all blocks are allocated with the anti-diagonal order.
+For example, we want to know that including anti-diagonal $2$, there are $3$ blocks in memory, thus the first block of anti-diagonal $4$ has address $3$.
+In the case of anti-diagonal $7$, we want to know there are $17$ blocks, thus the first block of anti-diagonal $8$ has address $17$.
+Again, we will split this calculation in two.
+First, lets see how it would look in the first half of the matrix, when $d < n$:
+
+$$\sum_{i=0}^{d} i/2+1$$
+
+In this summatory, $d$ is included, so we can simplify the formula like:
+
+$$(\sum_{i=0}^{d} i)/2 + d$$
+
+And then, remove the summatory:
+
+$$(\frac{n*(n+1)}{2})/2 + d$$
+
 ## FPGA implementation
 
 ### POTRF
