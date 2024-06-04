@@ -254,16 +254,16 @@ First, lets see how it would look in the first half of the matrix, when $d < n$:
 
 $$\sum_{i=0}^{d} i/2+1$$
 
-In this summatory, $d$ is included, so we can simplify the formula like:
+In this summation, $d$ is included, so we can simplify the formula like:
 
 $$(\sum_{i=0}^{d} i)/2 + d+1$$
 
-And then, remove the summatory and simplify the formula:
+And then, remove the summation and simplify the formula:
 
 $$\frac{d*(d+1)}{4} + d+1$$
 
 However, this simplification introduces a new problem.
-This fraction doesn't truncate the decimals of the divisions inside the summatory.
+This fraction doesn't truncate the decimals of the divisions inside the summation.
 I.e. even when truncating the division by 4, the formula is still counting decimals that we don't want to include.
 For example, when $d=5$, the formula would give us $1 + 1.5 + 2 + 2.5 + 3 + 3.5 = 13.5$, but the actual result is $12$.
 Therefore, we have to subtract those $0.5$ units from the result.
@@ -275,7 +275,7 @@ Finally, we have the formula:
 $$\frac{d*(d+1)}{4} + d+1 - \frac{d+1}{4}$$
 
 Now, we can go for the final formula when $d > n$.
-Lets go back some steps with the summatory:
+Lets go back some steps with the summation:
 
 $$(\sum_{i=0}^{d} i/2+1) - (\sum_{i=0}^{d-n} i+1)$$
 
@@ -289,17 +289,17 @@ Imagine the previous example with 3 ranks, on rank 1 we would have:
 
 ![cholesky_imp-Page-5](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/3a584b9e-78e3-4ffa-acd2-7ddb7916544b)
 
-In this case, we can see that the summatory doesn't start at anti-diagonal 0, it starts at the rank index $r$, and instead of jumping from one anti-diagonal to the next one, it is jumping by the number of ranks $s$.
+In this case, we can see that the summation doesn't start at anti-diagonal 0, it starts at the rank index $r$, and instead of jumping from one anti-diagonal to the next one, it is jumping by the number of ranks $s$.
 In this example, anti-diagonal $4$ would be stored locally in anti-diagonal $1$ of rank 1, and thus we would have to sum $(1/2+1)+(4/2+1)$.
-Again, starting only on the first half of the triangle, we would have the summatory like this:
+Again, starting only on the first half of the triangle, we would have the summation like this:
 
 $$\sum_{i=0}^{d} \frac{r+i*s}{2} + 1$$
 
 This time, $d$ refers to the local anti-diagonal, which can be calculated from the global anti-diagonal by dividing with the total number of ranks $d/s$.
 You can see that we get the same formula as the beggining if $s=1$ and $r=0$.
 However, the correction factor now depends also on $r$ and $s$.
-In the case of rank $1$, the extra $0.5$ that we don't want to count would be added like this in the summatory: $0.5 + 0 + 0.5 + 0 + 0.5 + 0 + 0.5$...
-Now the $0.5$ starts in the first unit of the summatory, which changes slightly the correction factor.
+In the case of rank $1$, the extra $0.5$ that we don't want to count would be added like this in the summation: $0.5 + 0 + 0.5 + 0 + 0.5 + 0 + 0.5$...
+Now the $0.5$ starts in the first unit of the summation, which changes slightly the correction factor.
 This is because when $d+1$ is odd, we are counting an extra $0.5$, which may generate an integer unit not counted in the old correction factor $(d+1)/4$.
 For example, when $d=2$ the correction factor would be $(2+1)/4 = 0$ but there are two $0.5$.
 To correct this, we have to adjust the formula to $(d+2)/4$.
@@ -311,15 +311,15 @@ This depends on if $r$ and $s$ are even or odd, resulting in 4 different possibi
 * If $r$ is odd and $s$ is odd, we have the second explained case and the correction factor is $(d+2)/4$.
 
 From now on, we call the correction factor $cf$ in the formulas.
-After removing the summatory and simplifying, we would have the final formula:
+After removing the summation and simplifying, we would have the final formula:
 
 $$\frac{2* r*(d+1) + s* d*(d+1)}{4} + d+1 - cf$$
 
 We only have one case left, when $d > n$ being $d$ the global anti-diagonal.
-In the previous case, the initial offset of the summatory was easy to get because it was the rank $r$ itself.
-However, for the second summatory is no as straightforward.
+In the previous case, the initial offset of the summation was easy to get because it was the rank $r$ itself.
+However, for the second summation is no as straightforward.
 This depends on who is the owner of the first anti-diagonal that is greater than $n$.
-In the case of the first summatory it is always $0$ because that's how we designed the data decomposition.
+In the case of the first summation it is always $0$ because that's how we designed the data decomposition.
 However, the *mirror* triangle (the one we want to subtract) first anti-diagonal depends on the number of blocks in a single dimension of the matrix.
 In the example there are $6$ blocks and $3$ ranks, and since one is multiple of the other, the offset matches, but if there are $7$ blocks, the first anti-diagonal greater than $n$ would belong to rank $1$.
 Therefore, we have to find the distance between the owner of the first anti-diagonal of the *mirror* triangle and rank $r$.
@@ -327,6 +327,33 @@ This owner is $n \bmod s$, so we have two cases:
 
 * If $r >= n \bmod s$, distance is $r - (n \bmod s)$
 * If $r < n \bmod s$, distance is $r+s - (n \bmod s)$
+
+We call this distance, or the *mirror* triangle offset, $mo$.
+Lastly, we have to modify a little bit the formula $d-n$ which was used to get the number of sums in the summation of the *mirror* triangle.
+Since now $d$ is a local anti-diagonal, we must use the number of anti-diagonals of rank $r$, which may change between ranks if $n$ is not multiple of $s$.
+In this case, like in the example above, if $r < (n \bmod s)$, rank $r$ has one extra anti-diagonal.
+Therefore, we have again two cases.
+
+* If $r >= n \bmod s$, the number of anti-diagonals in rank $r$ is $n/s$.
+* If $r < n \bmod s$, the number of anti-diagonals in rank $r$ is $n/s + 1$.
+
+Now we can have the final formula, taking into account that $n$ and $d$ refer to the local matrix.
+
+$$(\sum_{i=0}^{d} \frac{r+i* s} {2} + 1) - (\sum_{i=0}^{d-n} mo+i*s + 1)$$
+
+And the final formula without summations:
+
+$$\frac{2* r*(d+1) + s* d*(d+1)}{4} + d+1 - cf - ((d-n+1)* mo + \frac{s*(d-n)*(d-n+1)}{2} + (d-n+1))$$
+
+With this, we can get from the global block coordinates $(i,j)$, the actual address on any rank, as long as that rank is the owner of the block.
+First, we have to calculate the global anti-diagonal from the coordinates: $d=i+j$.
+Then, get the local anti-diagonal $d=d/s$.
+Apply the formula above, subtracting the *mirror* triangle part if necessary, for anti-diagonal $d-1$, so we get the address of the first block of $d$.
+Note that when $d=0$, even though we are applying the formula with a negative $d$, the result is $0$ which is correct.
+Then, we can get the actual address of block $(i,j)$ by adding the anti-diagonal $d$ offset:
+
+* If $d >= n$ both globals, then the offset is $n-1-i$.
+* If $d < n$ both globals, then the offset is $j$.
 
 ## FPGA implementation
 
