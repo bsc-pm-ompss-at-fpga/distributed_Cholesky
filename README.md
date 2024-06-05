@@ -207,23 +207,24 @@ From now on, we only represent blocks in the figures, so each square is a full b
 
 ![cholesky_imp-Page-5](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/8cc96839-e6b2-4ac5-b0e8-839ff0f8e0cf)
 
+In this example, we have the lower triangle of a 4x4 block matrix.
 The numbers represent the rank owner of that block, as well as the colors.
 The first question is how to allocate the blocks on each rank.
 I.e. after the first block, what should go next, the  block on the right, bottom, left?
-In the figure it is not obvious because there are only 3 blocks.
-But the general idea is to store one anti-diagonal of blocks after the other, from top-left to bottom-right.
+The general idea is to store one anti-diagonal of blocks after the other, from top-left to bottom-right.
 Then, each anti-diagonal store it from bottom-left to top-right.
 
 ![cholesky_imp-Page-5 (1)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/5ba07c23-5a09-45fd-ad20-5aba2a3e3ca5)
 
 This figure represents a bit better the memory layout of the previous example with 3 ranks.
-Now, the numbers on each block represent the *block* coordinates, and the color represents the rank owner.
+Now, the numbers on each block represent the block coordinates, and the color represents the rank owner.
 As you can see, in memory each rank only stores the blocks owned by itself, with the aforementioned order.
 This memory layout is very useful because it allow us to get the memory address of any block from the block coordinates with a generic formula.
 For example, for rank 0, with just some arithmetic operations we can learn that block $(3,0)$ is in address $1$ in memory, or that block $(3,3)$ is in address $3$.
 
 For that, we start with how to calculate the number of elements in a given anti-diagonal $d$.
 The answer is $d/2 + 1$ when $d > n$, being $n$ the number of blocks in a single dimension of the matrix, and with integer division, i.e. truncating the decimals.
+All divisions we show from now on are integer divisions.
 
 ![cholesky_imp-Page-5 (2)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/05f4453a-5068-4e2b-8a32-899b42df57bf)
 
@@ -238,15 +239,16 @@ In fact, you can visualize how many blocks you are counting.
 ![cholesky_imp-Page-5 (3)](https://github.com/bsc-pm-ompss-at-fpga/distributed_Cholesky/assets/17345627/2e2c7197-4e41-42c5-acd7-44ad459c872d)
 
 One solution to this problem is to subtract the extra part we don't want to count.
+This part we will cal it the *mirror* triangle, because you can see it as a projection of the matrix on a mirror (although it is not an exact projection).
 In this case, the number of extra blocks we are counting grows by 1 between consecutive anti-diagonals.
 Therefore, the resulting formula is $d/2 - (d-n+1)$.
 In summary, we have:
-* $d/2 + 1$ if $d <= n$ and truncating the decimals.
-* $d/2 + 1 - (d-n+1)$ if $d > n$ and truncating the decimals.
+* $d/2 + 1$ if $d <= n$.
+* $d/2 + 1 - (d-n+1)$ if $d > n$.
 
 Now, we can use this formula to calculate how many blocks there are stored from anti-diagonal $0$ to $d$.
 I.e. the memory offset of anti-diagonal $d+1$.
-For the moment, we assume there is only one rank, so all blocks are allocated with the anti-diagonal order.
+For the moment, we assume there is only one rank.
 For example, we want to know that including anti-diagonal $2$, there are $3$ blocks in memory, thus the first block of anti-diagonal $4$ has address $3$.
 In the case of anti-diagonal $7$, we want to know there are $17$ blocks, thus the first block of anti-diagonal $8$ has address $17$.
 Again, we will split this calculation in two.
@@ -254,11 +256,7 @@ First, lets see how it would look in the first half of the matrix, when $d < n$:
 
 $$\sum_{i=0}^{d} i/2+1$$
 
-In this summation, $d$ is included, so we can simplify the formula like:
-
-$$(\sum_{i=0}^{d} i)/2 + d+1$$
-
-And then, remove the summation and simplify the formula:
+In this summation, $d$ is included, so we can remove the summation and simplify the formula like this:
 
 $$\frac{d*(d+1)}{4} + d+1$$
 
@@ -300,9 +298,9 @@ You can see that we get the same formula as the beggining if $s=1$ and $r=0$.
 However, the correction factor now depends also on $r$ and $s$.
 In the case of rank $1$, the extra $0.5$ that we don't want to count would be added like this in the summation: $0.5 + 0 + 0.5 + 0 + 0.5 + 0 + 0.5$...
 Now the $0.5$ starts in the first unit of the summation, which changes slightly the correction factor.
-This is because when $d+1$ is odd, we are counting an extra $0.5$, which may generate an integer unit not counted in the old correction factor $(d+1)/4$.
+This is because when $d+1$ is odd, we are adding an extra $0.5$, which may generate an integer unit not counted in the old correction factor $(d+1)/4$.
 For example, when $d=2$ the correction factor would be $(2+1)/4 = 0$ but there are two $0.5$.
-To correct this, we have to adjust the formula to $(d+2)/4$.
+To fix this, we have to adjust the formula to $(d+2)/4$.
 This depends on if $r$ and $s$ are even or odd, resulting in 4 different possibilities:
 
 * If $r$ is even and $s$ is even, we are only adding numbers that are multiple of 2, so the correction factor is $0$.
@@ -317,25 +315,25 @@ $$\frac{2* r*(d+1) + s* d*(d+1)}{4} + d+1 - cf$$
 
 We only have one case left, when $d > n$ being $d$ the global anti-diagonal.
 In the previous case, the initial offset of the summation was easy to get because it was the rank $r$ itself.
-However, for the second summation is no as straightforward.
+However, for the second summation it is not as straightforward.
 This depends on who is the owner of the first anti-diagonal that is greater than $n$.
 In the case of the first summation it is always $0$ because that's how we designed the data decomposition.
-However, the *mirror* triangle (the one we want to subtract) first anti-diagonal depends on the number of blocks in a single dimension of the matrix.
+However, the *mirror* triangle first anti-diagonal depends on the number of blocks in a single dimension of the matrix.
 In the example there are $6$ blocks and $3$ ranks, and since one is multiple of the other, the offset matches, but if there are $7$ blocks, the first anti-diagonal greater than $n$ would belong to rank $1$.
 Therefore, we have to find the distance between the owner of the first anti-diagonal of the *mirror* triangle and rank $r$.
 This owner is $n \bmod s$, so we have two cases:
 
-* If $r >= n \bmod s$, distance is $r - (n \bmod s)$
-* If $r < n \bmod s$, distance is $r+s - (n \bmod s)$
+* If $r >= (n \bmod s)$, distance is $r - (n \bmod s)$
+* If $r < (n \bmod s)$, distance is $r+s - (n \bmod s)$
 
 We call this distance, or the *mirror* triangle offset, $mo$.
 Lastly, we have to modify a little bit the formula $d-n$ which was used to get the number of sums in the summation of the *mirror* triangle.
-Since now $d$ is a local anti-diagonal, we must use the number of anti-diagonals of rank $r$, which may change between ranks if $n$ is not multiple of $s$.
+Since now $d$ is a local anti-diagonal, $n$ must be the number of anti-diagonals of rank $r$, which may change between ranks if the global $n$ is not multiple of $s$.
 In this case, like in the example above, if $r < (n \bmod s)$, rank $r$ has one extra anti-diagonal.
 Therefore, we have again two cases.
 
-* If $r >= n \bmod s$, the number of anti-diagonals in rank $r$ is $n/s$.
-* If $r < n \bmod s$, the number of anti-diagonals in rank $r$ is $n/s + 1$.
+* If $r >= (n \bmod s)$, the number of anti-diagonals in rank $r$ is $n/s$.
+* If $r < (n \bmod s)$, the number of anti-diagonals in rank $r$ is $n/s + 1$.
 
 Now we can have the final formula, taking into account that $n$ and $d$ refer to the local matrix.
 
